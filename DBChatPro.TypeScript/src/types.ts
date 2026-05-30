@@ -67,6 +67,7 @@ export interface AIProviderConfig {
 export interface DbChatApi {
   getConnections(): Promise<AIConnection[]>;
   addConnection(connection: AIConnection): Promise<void>;
+  updateConnection(originalName: string, connection: AIConnection): Promise<void>;
   deleteConnection(name: string): Promise<void>;
   generateSchema(connection: AIConnection): Promise<DatabaseSchema>;
   getAiSqlQuery(

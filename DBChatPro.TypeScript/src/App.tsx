@@ -1,21 +1,35 @@
 import { useEffect, useMemo, useState } from "react";
 import {
+  BarChart3,
+  Bell,
   Bot,
   ChevronDown,
+  CheckCircle2,
+  Clipboard,
+  Columns3,
   Database,
   Download,
+  Edit3,
+  FileCode,
+  Filter,
   Heart,
   History,
+  Home,
+  Lightbulb,
+  ListPlus,
   Menu,
   MessageSquare,
-  Play,
   Plus,
   RefreshCcw,
   Save,
-  Search,
+  Send,
+  Server,
   ShieldCheck,
+  SlidersHorizontal,
   Settings,
-  Trash2
+  Table2,
+  Trash2,
+  UserCircle
 } from "lucide-react";
 import { mockApi } from "./services/mockApi";
 import type {
@@ -108,10 +122,64 @@ function getAvailableModels(settings: AISettings): string[] {
   );
 }
 
-function refreshModels(settings: AISettings): Promise<string[]> {
-  return new Promise((resolve) => {
-    window.setTimeout(() => resolve(getAvailableModels(settings)), 350);
-  });
+function normalizeEndpoint(endpoint: string): string {
+  return endpoint.trim().replace(/\/+$/, "");
+}
+
+function isGoogleGenerativeEndpoint(endpoint: string): boolean {
+  return /generativelanguage\.googleapis\.com\/v1(beta)?$/i.test(normalizeEndpoint(endpoint));
+}
+
+function getModelNameFromGoogleName(name: string): string {
+  return name.replace(/^models\//, "");
+}
+
+async function fetchProviderModels(settings: AISettings): Promise<string[]> {
+  const endpoint = normalizeEndpoint(settings.endpoint || getProviderEndpoint(settings, settings.platform));
+  if (!endpoint) {
+    return getAvailableModels(settings);
+  }
+
+  const headers: HeadersInit = { Accept: "application/json" };
+  let url = `${endpoint}/models`;
+
+  if (isGoogleGenerativeEndpoint(endpoint)) {
+    const search = new URLSearchParams();
+    if (settings.apiKey) {
+      search.set("key", settings.apiKey);
+    }
+    url = `${endpoint}/models${search.toString() ? `?${search}` : ""}`;
+  } else if (settings.apiKey) {
+    headers.Authorization = `Bearer ${settings.apiKey}`;
+  }
+
+  const response = await fetch(url, { headers });
+  if (!response.ok) {
+    throw new Error(`Model refresh failed with ${response.status} ${response.statusText || "response"}.`);
+  }
+
+  const payload = (await response.json()) as {
+    data?: Array<{ id?: string; name?: string }>;
+    models?: Array<{ name?: string; supportedGenerationMethods?: string[] }>;
+  };
+
+  if (Array.isArray(payload.data)) {
+    return payload.data.map((model) => model.id ?? model.name ?? "").filter(Boolean);
+  }
+
+  if (Array.isArray(payload.models)) {
+    return payload.models
+      .filter((model) => !model.supportedGenerationMethods || model.supportedGenerationMethods.includes("generateContent"))
+      .map((model) => getModelNameFromGoogleName(model.name ?? ""))
+      .filter(Boolean);
+  }
+
+  return [];
+}
+
+async function refreshModels(settings: AISettings): Promise<string[]> {
+  const fetchedModels = await fetchProviderModels(settings);
+  return Array.from(new Set([...fetchedModels, ...getAvailableModels(settings)]));
 }
 
 function getProviderOptions(settings: AISettings): Array<{ id: string; name: string }> {
@@ -150,6 +218,16 @@ function quoteSqlValue(value: string): string {
   return `'${trimmed.replaceAll("'", "''")}'`;
 }
 
+function parseNumericCell(value: string | undefined): number | null {
+  const normalized = (value ?? "").replaceAll(",", "").trim();
+  if (!/^-?\d+(\.\d+)?$/.test(normalized)) {
+    return null;
+  }
+
+  const parsed = Number.parseFloat(normalized);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 function buildSmartSql(options: {
   databaseType: DatabaseType;
   tableName: string;
@@ -161,6 +239,7 @@ function buildSmartSql(options: {
   filterColumn: string;
   filterOperator: string;
   filterValue: string;
+  groupByColumn: string;
   sortColumn: string;
   sortDirection: string;
   limit: string;
@@ -181,6 +260,10 @@ function buildSmartSql(options: {
 
   if (options.filterColumn && options.filterOperator && options.filterValue) {
     lines.push(`WHERE ${options.filterColumn} ${options.filterOperator} ${quoteSqlValue(options.filterValue)}`);
+  }
+
+  if (options.groupByColumn) {
+    lines.push(`GROUP BY ${options.groupByColumn}`);
   }
 
   if (options.sortColumn) {
@@ -230,7 +313,7 @@ export function App() {
   const [favorites, setFavorites] = useState<HistoryItem[]>([]);
   const [chatHistory, setChatHistory] = useState<ChatMessage[]>([]);
   const [chatPrompt, setChatPrompt] = useState("");
-  const [activeTab, setActiveTab] = useState<"results" | "sql" | "insights">("results");
+  const [activeTab, setActiveTab] = useState<"results" | "sql" | "insights" | "chart" | "data">("results");
   const [drawerTab, setDrawerTab] = useState<"schema" | "chat" | "history" | "favorites">("schema");
   const [drawerOpen, setDrawerOpen] = useState(true);
   const [compactRows, setCompactRows] = useState(false);
@@ -243,6 +326,7 @@ export function App() {
     connectionString: "",
     databaseType: "MSSQL"
   });
+  const [editingConnectionName, setEditingConnectionName] = useState("");
   const [previewSchema, setPreviewSchema] = useState<DatabaseSchema>(emptySchema);
 
   const activeConnection = useMemo(
@@ -362,11 +446,16 @@ export function App() {
       return;
     }
 
-    await api.addConnection(connectionDraft);
+    if (editingConnectionName) {
+      await api.updateConnection(editingConnectionName, connectionDraft);
+    } else {
+      await api.addConnection(connectionDraft);
+    }
     const nextConnections = await api.getConnections();
     setConnections(nextConnections);
     setActiveConnectionName(connectionDraft.name);
     setConnectionDraft({ name: "", connectionString: "", databaseType: "MSSQL" });
+    setEditingConnectionName("");
     setPreviewSchema(emptySchema);
     setRoute("dashboard");
   }
@@ -376,6 +465,26 @@ export function App() {
     const nextConnections = await api.getConnections();
     setConnections(nextConnections);
     setActiveConnectionName(nextConnections[0]?.name ?? "");
+    if (editingConnectionName === name) {
+      setEditingConnectionName("");
+      setConnectionDraft({ name: "", connectionString: "", databaseType: "MSSQL" });
+      setPreviewSchema(emptySchema);
+    }
+  }
+
+  function editConnection(connection: AIConnection) {
+    setError("");
+    setEditingConnectionName(connection.name);
+    setConnectionDraft({ ...connection });
+    setPreviewSchema(emptySchema);
+    setRoute("connections");
+  }
+
+  function cancelEditConnection() {
+    setError("");
+    setEditingConnectionName("");
+    setConnectionDraft({ name: "", connectionString: "", databaseType: "MSSQL" });
+    setPreviewSchema(emptySchema);
   }
 
   async function sendChat() {
@@ -397,9 +506,12 @@ export function App() {
         setDraft={setConnectionDraft}
         previewSchema={previewSchema}
         connections={connections}
+        editingConnectionName={editingConnectionName}
         error={error}
         onCheck={checkConnection}
         onSave={saveConnection}
+        onEdit={editConnection}
+        onCancelEdit={cancelEditConnection}
         onDelete={deleteConnection}
       />
     ) : route === "settings" ? (
@@ -458,7 +570,7 @@ export function App() {
         setBorderedRows={setBorderedRows}
         loadingMessage={loadingMessage}
         error={error}
-        onRun={runPrompt}
+        onRun={() => runPrompt()}
         onExecuteSql={executeSql}
         onSaveFavorite={saveFavorite}
         onExport={() => downloadCsv(result)}
@@ -480,15 +592,39 @@ export function App() {
           <Database size={28} />
           <span>DBChatPro</span>
         </div>
+        <button className="new-chat-button" onClick={() => setRoute("dashboard")}>
+          <Plus size={18} /> New Chat
+          <kbd>⌘K</kbd>
+        </button>
         <button className={route === "dashboard" ? "active nav-button" : "nav-button"} onClick={() => setRoute("dashboard")}>
-          <Search size={18} /> Dashboard
+          <Home size={18} /> Dashboard
+        </button>
+        <button className="nav-button" onClick={() => setRoute("dashboard")}>
+          <MessageSquare size={18} /> Chat
+        </button>
+        <button className="nav-button" onClick={() => setRoute("dashboard")}>
+          <FileCode size={18} /> Queries
+        </button>
+        <button className="nav-button" onClick={() => setRoute("dashboard")}>
+          <BarChart3 size={18} /> Insights
         </button>
         <button className={route === "connections" ? "active nav-button" : "nav-button"} onClick={() => setRoute("connections")}>
-          <Plus size={18} /> Connections
+          <Server size={18} /> Data Sources
+        </button>
+        <button className="nav-button" onClick={() => setRoute("dashboard")}>
+          <Bell size={18} /> Alerts
         </button>
         <button className={route === "settings" ? "active nav-button" : "nav-button"} onClick={() => setRoute("settings")}>
           <Settings size={18} /> Settings
         </button>
+        <div className="nav-user">
+          <UserCircle size={30} />
+          <div>
+            <strong>Aiden Davis</strong>
+            <span>Admin</span>
+          </div>
+          <ChevronDown size={15} />
+        </div>
       </aside>
       <main className="workspace">{mainContent}</main>
     </div>
@@ -516,8 +652,8 @@ interface DashboardProps {
   chatHistory: ChatMessage[];
   chatPrompt: string;
   setChatPrompt(value: string): void;
-  activeTab: "results" | "sql" | "insights";
-  setActiveTab(value: "results" | "sql" | "insights"): void;
+  activeTab: "results" | "sql" | "insights" | "chart" | "data";
+  setActiveTab(value: "results" | "sql" | "insights" | "chart" | "data"): void;
   drawerTab: "schema" | "chat" | "history" | "favorites";
   setDrawerTab(value: "schema" | "chat" | "history" | "favorites"): void;
   drawerOpen: boolean;
@@ -559,9 +695,12 @@ function DashboardView(props: DashboardProps) {
     <div className={props.drawerOpen ? "dashboard with-drawer" : "dashboard"}>
       <section className="query-panel">
         <header className="page-header">
-          <div>
-            <h1>Chat with your database</h1>
-            <p>Generate SQL from natural language, inspect results, and continue the analysis in chat.</p>
+          <div className="header-title">
+            <span className="header-icon"><MessageSquare size={20} /></span>
+            <div>
+              <h1>Chat with your database</h1>
+              <p>Generate SQL from natural language, inspect results, and continue the analysis in chat.</p>
+            </div>
           </div>
           <button className="icon-button" title="Toggle drawer" onClick={() => props.setDrawerOpen(!props.drawerOpen)}>
             <Menu size={20} />
@@ -599,18 +738,34 @@ function DashboardView(props: DashboardProps) {
           </label>
         </div>
 
-        <label className="prompt-box">
-          Your prompt
-          <textarea
-            value={props.prompt}
-            onChange={(event) => props.setPrompt(event.target.value)}
-            placeholder="Show the 10 most recent orders with customer names and totals"
-          />
-        </label>
-        <div className="action-row">
-          <button className="primary-button" onClick={props.onRun} disabled={!props.prompt.trim() || Boolean(props.loadingMessage)}>
-            <Play size={18} /> Submit
-          </button>
+        <div className="prompt-workbench">
+          <label className="prompt-box">
+            Your prompt
+            <textarea
+              value={props.prompt}
+              onChange={(event) => props.setPrompt(event.target.value)}
+              placeholder="Show total revenue by product category for the last 6 months, month over month."
+            />
+          </label>
+          <div className="prompt-side-actions">
+            <button className="secondary-button" onClick={() => props.setPrompt("Show total revenue by product category for the last 6 months, month over month.")}>
+              <SlidersHorizontal size={17} /> Advanced Options
+            </button>
+            <button className="primary-button submit-button" onClick={props.onRun} disabled={!props.prompt.trim() || Boolean(props.loadingMessage)}>
+              <Send size={18} /> Submit
+              <kbd>⌘↵</kbd>
+            </button>
+          </div>
+          <div className="prompt-tools" aria-label="Prompt tools">
+            <button title="Suggest prompt" onClick={() => props.setPrompt("Find anomalies in monthly revenue and explain likely causes.")}>
+              <Lightbulb size={16} />
+            </button>
+            <button title="Insert SQL intent" onClick={() => props.setPrompt(`${props.prompt} Include filters, grouping, and a safe row limit.`.trim())}>
+              <Clipboard size={16} />
+            </button>
+          </div>
+        </div>
+        <div className="action-row status-row">
           {props.loadingMessage && <span className="status-text">{props.loadingMessage}</span>}
           {props.error && <span className="error-text">{props.error}</span>}
         </div>
@@ -619,6 +774,8 @@ function DashboardView(props: DashboardProps) {
           <button className={props.activeTab === "results" ? "active" : ""} onClick={() => props.setActiveTab("results")}>Results</button>
           <button className={props.activeTab === "sql" ? "active" : ""} onClick={() => props.setActiveTab("sql")}>SQL Editor</button>
           <button className={props.activeTab === "insights" ? "active" : ""} onClick={() => props.setActiveTab("insights")}>Insights</button>
+          <button className={props.activeTab === "chart" ? "active" : ""} onClick={() => props.setActiveTab("chart")}>Chart</button>
+          <button className={props.activeTab === "data" ? "active" : ""} onClick={() => props.setActiveTab("data")}>Data</button>
         </div>
 
         {props.activeTab === "results" && (
@@ -653,6 +810,8 @@ function DashboardView(props: DashboardProps) {
         )}
 
         {props.activeTab === "insights" && <section className="panel insight-panel">{props.summary || "No insights to show."}</section>}
+        {props.activeTab === "chart" && <ChartPanel result={props.result} />}
+        {props.activeTab === "data" && <DataExplorerPanel result={props.result} schema={props.schema} />}
       </section>
 
       {props.drawerOpen && (
@@ -696,6 +855,7 @@ function SmartSqlBuilder(props: {
   const [filterColumn, setFilterColumn] = useState("");
   const [filterOperator, setFilterOperator] = useState("=");
   const [filterValue, setFilterValue] = useState("");
+  const [groupByColumn, setGroupByColumn] = useState("");
   const [sortColumn, setSortColumn] = useState("");
   const [sortDirection, setSortDirection] = useState("DESC");
   const [limit, setLimit] = useState("10");
@@ -721,6 +881,7 @@ function SmartSqlBuilder(props: {
       setJoinLeftColumn("");
       setJoinRightColumn("");
       setFilterColumn("");
+      setGroupByColumn("");
       setSortColumn("");
     }
   }, [firstTable, tableName, tableNames]);
@@ -744,6 +905,7 @@ function SmartSqlBuilder(props: {
         filterColumn,
         filterOperator,
         filterValue,
+        groupByColumn,
         sortColumn,
         sortDirection,
         limit
@@ -761,9 +923,24 @@ function SmartSqlBuilder(props: {
     setFilterColumn("");
     setFilterOperator("=");
     setFilterValue("");
+    setGroupByColumn("");
     setSortColumn("");
     setSortDirection("DESC");
     setLimit("10");
+  }
+
+  function selectAllColumns() {
+    setSelectedColumns(activeColumns);
+  }
+
+  function suggestJoin() {
+    const nextJoinTable = tableNames.find((name) => name !== tableName) ?? "";
+    const nextJoinColumns = props.schema.schemaStructured.find((table) => table.tableName === nextJoinTable)?.columns ?? [];
+    const currentId = activeTable?.columns.find((column) => /(^id$|_id$|id$)/i.test(column)) ?? activeTable?.columns[0] ?? "";
+    const nextId = nextJoinColumns.find((column) => /(^id$|_id$|id$)/i.test(column)) ?? nextJoinColumns[0] ?? "";
+    setJoinTable(nextJoinTable);
+    setJoinLeftColumn(currentId ? `${tableName}.${currentId}` : "");
+    setJoinRightColumn(nextId ? `${nextJoinTable}.${nextId}` : "");
   }
 
   if (!props.schema.schemaStructured.length) {
@@ -778,6 +955,12 @@ function SmartSqlBuilder(props: {
           <p>Build a query visually from the active schema, then edit the generated SQL before execution.</p>
         </div>
         <div className="action-row">
+          <button className="secondary-button" onClick={selectAllColumns} disabled={!activeColumns.length}>
+            <Columns3 size={17} /> Select all
+          </button>
+          <button className="secondary-button" onClick={suggestJoin} disabled={tableNames.length < 2}>
+            <ListPlus size={17} /> Suggest join
+          </button>
           <button className="secondary-button" onClick={resetBuilder}>
             <RefreshCcw size={17} /> Reset
           </button>
@@ -805,7 +988,7 @@ function SmartSqlBuilder(props: {
       </div>
 
       <div className="column-picker">
-        <div className="builder-label">Columns</div>
+        <div className="builder-label"><Columns3 size={16} /> Select columns</div>
         <div className="column-chip-list">
           {activeColumns.map((column) => (
             <button key={column} className={selectedColumns.includes(column) ? "selected" : ""} onClick={() => toggleColumn(column)}>
@@ -816,6 +999,7 @@ function SmartSqlBuilder(props: {
       </div>
 
       <div className="builder-grid join-grid">
+        <div className="builder-stage">JOIN</div>
         <label>
           Join type
           <select value={joinType} onChange={(event) => setJoinType(event.target.value)}>
@@ -861,6 +1045,7 @@ function SmartSqlBuilder(props: {
       </datalist>
 
       <div className="builder-grid filter-grid">
+        <div className="builder-stage">WHERE</div>
         <label>
           Filter column
           <input list="sql-builder-all-columns" value={filterColumn} onChange={(event) => setFilterColumn(event.target.value)} placeholder="Optional WHERE column" />
@@ -884,6 +1069,14 @@ function SmartSqlBuilder(props: {
       </div>
 
       <div className="builder-grid sort-grid">
+        <label>
+          Group by
+          <input list="sql-builder-all-columns" value={groupByColumn} onChange={(event) => setGroupByColumn(event.target.value)} placeholder="Optional GROUP BY column" />
+        </label>
+      </div>
+
+      <div className="builder-grid sort-grid">
+        <div className="builder-stage">ORDER BY</div>
         <label>
           Sort column
           <input list="sql-builder-all-columns" value={sortColumn} onChange={(event) => setSortColumn(event.target.value)} placeholder="Optional ORDER BY column" />
@@ -917,6 +1110,14 @@ function ResultsPanel(props: {
 
   return (
     <section className="panel">
+      <div className="result-banner">
+        <span><CheckCircle2 size={17} /> Query executed successfully</span>
+        <div>
+          <span>812 ms</span>
+          <span>{props.result.rows.length} rows</span>
+          <button className="icon-button" title="Export data" onClick={props.onExport}><Download size={17} /></button>
+        </div>
+      </div>
       <div className="table-scroll">
         <table className={`${props.compactRows ? "compact-rows" : ""} ${props.stripedRows ? "striped-rows" : ""} ${props.borderedRows ? "bordered-rows" : ""}`}>
           <thead>
@@ -937,12 +1138,85 @@ function ResultsPanel(props: {
           </tbody>
         </table>
       </div>
+      <p className="table-caption">Showing 1 to {props.result.rows.length} of {props.result.rows.length} rows</p>
       <div className="control-strip">
         <label><input type="checkbox" checked={props.compactRows} onChange={(event) => props.setCompactRows(event.target.checked)} /> Dense</label>
         <label><input type="checkbox" checked={props.stripedRows} onChange={(event) => props.setStripedRows(event.target.checked)} /> Striped</label>
         <label><input type="checkbox" checked={props.borderedRows} onChange={(event) => props.setBorderedRows(event.target.checked)} /> Bordered</label>
         <button className="secondary-button" onClick={props.onFavorite}><Heart size={17} /> Favorite</button>
         <button className="secondary-button" onClick={props.onExport}><Download size={17} /> Export Data</button>
+      </div>
+    </section>
+  );
+}
+
+function ChartPanel({ result }: { result: QueryResult }) {
+  const numericColumnIndex = result.columns.findIndex((_, index) =>
+    result.rows.some((row) => parseNumericCell(row[index]) !== null)
+  );
+  const labelColumnIndex = result.columns.findIndex((_, index) => index !== numericColumnIndex);
+  const values = result.rows.slice(0, 6).map((row) => {
+    return {
+      label: row[labelColumnIndex] ?? row[0] ?? "Row",
+      value: parseNumericCell(row[numericColumnIndex]) ?? 0
+    };
+  });
+  const maxValue = Math.max(...values.map((item) => item.value), 1);
+
+  if (!result.rows.length || numericColumnIndex < 0) {
+    return <section className="panel muted-panel">Run a query with numeric values to preview a chart.</section>;
+  }
+
+  return (
+    <section className="panel chart-panel">
+      <div className="panel-title-row">
+        <div>
+          <h2>Chart preview</h2>
+          <p className="muted-text">Visual preview generated from the first numeric result column.</p>
+        </div>
+        <BarChart3 size={22} />
+      </div>
+      <div className="bar-chart">
+        {values.map((item) => (
+          <div className="bar-row" key={`${item.label}-${item.value}`}>
+            <span>{item.label}</span>
+            <div><i style={{ width: `${Math.max(8, (item.value / maxValue) * 100)}%` }} /></div>
+            <strong>{item.value.toLocaleString()}</strong>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function DataExplorerPanel({ result, schema }: { result: QueryResult; schema: DatabaseSchema }) {
+  return (
+    <section className="panel data-explorer-panel">
+      <div className="panel-title-row">
+        <div>
+          <h2>Data explorer</h2>
+          <p className="muted-text">Profile the current result and schema before refining the query.</p>
+        </div>
+        <Table2 size={22} />
+      </div>
+      <div className="metric-grid">
+        <article>
+          <span>Rows</span>
+          <strong>{result.rows.length}</strong>
+        </article>
+        <article>
+          <span>Columns</span>
+          <strong>{result.columns.length}</strong>
+        </article>
+        <article>
+          <span>Tables</span>
+          <strong>{schema.schemaStructured.length}</strong>
+        </article>
+      </div>
+      <div className="data-column-list">
+        {result.columns.map((column) => (
+          <span key={column}><Filter size={14} /> {column}</span>
+        ))}
       </div>
     </section>
   );
@@ -977,7 +1251,10 @@ function ChatPanel(props: {
 }) {
   return (
     <section className="drawer-section chat-panel">
-      <p>Ask the AI model for insights about the current query result.</p>
+      <div className="drawer-ai-header">
+        <Bot size={18} />
+        <strong>DBChatPro AI</strong>
+      </div>
       <div className="chat-list">
         {props.history.filter((message) => message.role !== "system").map((message, index) => (
           <article key={`${message.role}-${index}`} className={`chat-message ${message.role}`}>
@@ -985,10 +1262,21 @@ function ChatPanel(props: {
             <span>{message.text}</span>
           </article>
         ))}
+        {!props.history.some((message) => message.role !== "system") && (
+          <article className="chat-message assistant">
+            <strong>AI Assistant</strong>
+            <span>Run a query, then ask for trends, exceptions, charts, or a safer SQL rewrite.</span>
+          </article>
+        )}
+      </div>
+      <div className="chat-suggestions">
+        <button onClick={() => props.setPrompt("Show this as a line chart")}>Show this as a line chart</button>
+        <button onClick={() => props.setPrompt("Compare to previous year")}>Compare to previous year</button>
+        <button onClick={() => props.setPrompt("Break down by sub-category")}>Break down by sub-category</button>
       </div>
       <textarea value={props.prompt} onChange={(event) => props.setPrompt(event.target.value)} placeholder="Ask about trends, outliers, or next actions" />
       <div className="action-row">
-        <button className="primary-button" onClick={props.onSend}><MessageSquare size={17} /> Submit</button>
+        <button className="primary-button" onClick={props.onSend}><Send size={17} /> Submit</button>
         <button className="secondary-button" onClick={props.onClear}>Clear</button>
       </div>
     </section>
@@ -1019,11 +1307,17 @@ function ConnectionsView(props: {
   setDraft(value: AIConnection): void;
   previewSchema: DatabaseSchema;
   connections: AIConnection[];
+  editingConnectionName: string;
   error: string;
   onCheck(): void;
   onSave(): void;
+  onEdit(connection: AIConnection): void;
+  onCancelEdit(): void;
   onDelete(name: string): void;
 }) {
+  const isEditing = Boolean(props.editingConnectionName);
+  const canSave = Boolean(props.draft.name.trim() && props.draft.connectionString.trim());
+
   return (
     <div className="connections-page">
       <header className="page-header">
@@ -1035,8 +1329,12 @@ function ConnectionsView(props: {
 
       <section className="connection-grid">
         <div className="panel">
-          <h2>Add a Connection</h2>
-          <p className="muted-text">The AI service receives schema context only; it does not need direct access to record data.</p>
+          <h2>{isEditing ? "Edit Connection" : "Add a Connection"}</h2>
+          <p className="muted-text">
+            {isEditing
+              ? `Editing ${props.editingConnectionName}. Saved query history is kept if you rename it.`
+              : "The AI service receives schema context only; it does not need direct access to record data."}
+          </p>
           {props.error && <p className="error-text">{props.error}</p>}
           <label>
             Database Type
@@ -1065,7 +1363,14 @@ function ConnectionsView(props: {
           )}
           <div className="action-row">
             <button className="primary-button" onClick={props.onCheck}><Bot size={17} /> Check Connection</button>
-            {props.previewSchema.schemaStructured.length > 0 && <button className="secondary-button" onClick={props.onSave}><Save size={17} /> Save</button>}
+            <button className="secondary-button" onClick={props.onSave} disabled={!canSave}>
+              <Save size={17} /> {isEditing ? "Update" : "Save"}
+            </button>
+            {isEditing && (
+              <button className="secondary-button" onClick={props.onCancelEdit}>
+                Cancel
+              </button>
+            )}
           </div>
           {props.previewSchema.schemaStructured.length > 0 && <SchemaTree schema={props.previewSchema} databaseName={props.draft.name || "New connection"} />}
         </div>
@@ -1080,9 +1385,14 @@ function ConnectionsView(props: {
                     <strong>{connection.name}</strong>
                     <span>{connection.databaseType}</span>
                   </div>
-                  <button className="icon-button danger" title="Delete connection" onClick={() => props.onDelete(connection.name)}>
-                    <Trash2 size={18} />
-                  </button>
+                  <div className="connection-actions">
+                    <button className="icon-button" title={`Edit ${connection.name}`} onClick={() => props.onEdit(connection)}>
+                      <Edit3 size={17} />
+                    </button>
+                    <button className="icon-button danger" title="Delete connection" onClick={() => props.onDelete(connection.name)}>
+                      <Trash2 size={18} />
+                    </button>
+                  </div>
                 </article>
               ))}
             </div>
@@ -1110,6 +1420,7 @@ function SettingsView(props: {
     models: ""
   });
   const [refreshingModels, setRefreshingModels] = useState(false);
+  const [modelRefreshError, setModelRefreshError] = useState("");
   const [saved, setSaved] = useState(false);
 
   useEffect(() => {
@@ -1120,7 +1431,11 @@ function SettingsView(props: {
   function saveSettings() {
     const settingsToSave = syncSelectedCustomProvider(draft);
     setDraft(settingsToSave);
-    props.onSave(settingsToSave);
+    persistSettings(settingsToSave);
+  }
+
+  function persistSettings(nextSettings: AISettings) {
+    props.onSave(nextSettings);
     setSaved(true);
     window.setTimeout(() => setSaved(false), 1800);
   }
@@ -1149,13 +1464,31 @@ function SettingsView(props: {
   }
 
   async function handleRefreshModels(nextDraft = draft) {
+    setModelRefreshError("");
     setRefreshingModels(true);
-    const models = await refreshModels(nextDraft);
-    setAvailableModels(models);
-    setRefreshingModels(false);
-
-    if (!nextDraft.model && models.length > 0) {
-      setDraft({ ...nextDraft, model: models[0] });
+    try {
+      const settingsToRefresh = syncSelectedCustomProvider(nextDraft);
+      const models = await refreshModels(settingsToRefresh);
+      const refreshedDraft: AISettings = {
+        ...settingsToRefresh,
+        model: settingsToRefresh.model && models.includes(settingsToRefresh.model) ? settingsToRefresh.model : models[0] ?? settingsToRefresh.model,
+        customModels: {
+          ...(settingsToRefresh.customModels ?? {}),
+          [settingsToRefresh.platform]: Array.from(new Set([...((settingsToRefresh.customModels ?? {})[settingsToRefresh.platform] ?? []), ...models]))
+        },
+        customProviders: (settingsToRefresh.customProviders ?? []).map((provider) =>
+          provider.id === settingsToRefresh.platform
+            ? { ...provider, models: Array.from(new Set([...provider.models, ...models])) }
+            : provider
+        )
+      };
+      setDraft(refreshedDraft);
+      setAvailableModels(getAvailableModels(refreshedDraft));
+      persistSettings(refreshedDraft);
+    } catch (nextError) {
+      setModelRefreshError(nextError instanceof Error ? nextError.message : "Unable to refresh models from this provider.");
+    } finally {
+      setRefreshingModels(false);
     }
   }
 
@@ -1193,6 +1526,7 @@ function SettingsView(props: {
 
     setDraft(nextDraft);
     setAvailableModels(getAvailableModels(nextDraft));
+    persistSettings(nextDraft);
     setCustomModelName("");
   }
 
@@ -1227,6 +1561,7 @@ function SettingsView(props: {
 
     setDraft(nextDraft);
     setAvailableModels(getAvailableModels(nextDraft));
+    persistSettings(nextDraft);
     setCustomProviderDraft({ name: "", endpoint: "", apiKey: "", models: "" });
   }
 
@@ -1244,6 +1579,7 @@ function SettingsView(props: {
 
     setDraft(nextDraft);
     setAvailableModels(getAvailableModels(nextDraft));
+    persistSettings(nextDraft);
   }
 
   return (
@@ -1335,6 +1671,7 @@ function SettingsView(props: {
               <RefreshCcw size={17} /> {refreshingModels ? "Refreshing" : "Refresh"}
             </button>
           </div>
+          {modelRefreshError && <p className="error-text">{modelRefreshError}</p>}
           <div className="custom-model-row">
             <label>
               Custom model name

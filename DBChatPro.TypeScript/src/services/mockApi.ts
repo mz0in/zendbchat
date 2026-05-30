@@ -53,20 +53,27 @@ const schemas: Record<DatabaseType, DatabaseSchema> = {
   },
   SQLITE: {
     schemaStructured: [
-      { tableName: "notes", columns: ["id", "title", "body", "created_at", "updated_at"] },
-      { tableName: "tasks", columns: ["id", "note_id", "title", "status", "due_date"] },
-      { tableName: "settings", columns: ["key", "value", "updated_at"] }
+      { tableName: "Customers", columns: ["CustomerID", "CompanyName", "ContactName", "City", "Country"] },
+      { tableName: "Orders", columns: ["OrderID", "CustomerID", "OrderDate", "ShipCity", "ShipCountry"] },
+      { tableName: "OrderDetails", columns: ["OrderID", "ProductID", "UnitPrice", "Quantity", "Discount"] },
+      { tableName: "Products", columns: ["ProductID", "ProductName", "CategoryID", "UnitPrice", "UnitsInStock"] }
     ],
     schemaRaw: [
-      "notes(id, title, body, created_at, updated_at)",
-      "tasks(id, note_id, title, status, due_date)",
-      "settings(key, value, updated_at)"
+      "Customers(CustomerID, CompanyName, ContactName, City, Country)",
+      "Orders(OrderID, CustomerID, OrderDate, ShipCity, ShipCountry)",
+      "OrderDetails(OrderID, ProductID, UnitPrice, Quantity, Discount)",
+      "Products(ProductID, ProductName, CategoryID, UnitPrice, UnitsInStock)"
     ]
   }
 };
 
 const seedState: AppState = {
   connections: [
+    {
+      name: "Northwind SQLite",
+      databaseType: "SQLITE",
+      connectionString: "file:./data/northwind.sqlite"
+    },
     {
       name: "Sales Warehouse",
       databaseType: "MSSQL",
@@ -76,6 +83,23 @@ const seedState: AppState = {
   queries: []
 };
 
+function ensureDemoConnections(state: AppState): AppState {
+  const demoConnections = seedState.connections.filter(
+    (seedConnection) => !state.connections.some((connection) => connection.name === seedConnection.name)
+  );
+
+  if (!demoConnections.length) {
+    return state;
+  }
+
+  const nextState = {
+    ...state,
+    connections: [...demoConnections, ...state.connections]
+  };
+  saveState(nextState);
+  return nextState;
+}
+
 function loadState(): AppState {
   const raw = window.localStorage.getItem(storageKey);
   if (!raw) {
@@ -83,7 +107,7 @@ function loadState(): AppState {
     return seedState;
   }
 
-  return JSON.parse(raw) as AppState;
+  return ensureDemoConnections(JSON.parse(raw) as AppState);
 }
 
 function saveState(state: AppState): void {
@@ -99,11 +123,15 @@ function toSql(prompt: string, databaseType: DatabaseType): string {
   const limit = databaseType === "MSSQL" ? "TOP 10" : "";
 
   if (databaseType === "SQLITE") {
-    if (normalized.includes("task")) {
-      return "SELECT tasks.id, tasks.title, tasks.status, tasks.due_date FROM tasks ORDER BY tasks.due_date ASC LIMIT 10;";
+    if (normalized.includes("customer") || normalized.includes("list")) {
+      return "SELECT CustomerID, CompanyName, ContactName, City, Country FROM Customers ORDER BY CompanyName LIMIT 10;";
     }
 
-    return "SELECT notes.id, notes.title, notes.created_at, notes.updated_at FROM notes ORDER BY notes.updated_at DESC LIMIT 10;";
+    if (normalized.includes("order")) {
+      return "SELECT Orders.OrderID, Customers.CompanyName, Orders.OrderDate, Orders.ShipCity, Orders.ShipCountry FROM Orders JOIN Customers ON Customers.CustomerID = Orders.CustomerID ORDER BY Orders.OrderDate DESC LIMIT 10;";
+    }
+
+    return "SELECT ProductID, ProductName, UnitPrice, UnitsInStock FROM Products ORDER BY ProductName LIMIT 10;";
   }
 
   if (normalized.includes("customer") || normalized.includes("order")) {
@@ -131,6 +159,19 @@ export const mockApi: DbChatApi = {
     await delay(undefined);
   },
 
+  async updateConnection(originalName, connection) {
+    const state = loadState();
+    state.connections = [
+      ...state.connections.filter((item) => item.name !== originalName && item.name !== connection.name),
+      connection
+    ];
+    state.queries = state.queries.map((item) =>
+      item.databaseName === originalName ? { ...item, databaseName: connection.name } : item
+    );
+    saveState(state);
+    await delay(undefined);
+  },
+
   async deleteConnection(name) {
     const state = loadState();
     state.connections = state.connections.filter((item) => item.name !== name);
@@ -154,27 +195,34 @@ export const mockApi: DbChatApi = {
   async getDataTable(_connection, query): Promise<QueryResult> {
     const invoiceMode = query.toLowerCase().includes("invoice");
     const ticketMode = query.toLowerCase().includes("ticket");
-    const sqliteNotesMode = query.toLowerCase().includes("notes");
-    const sqliteTasksMode = query.toLowerCase().includes("tasks");
+    const sqliteCustomerMode = query.toLowerCase().includes("customers");
+    const sqliteProductMode = query.toLowerCase().includes("products");
 
-    if (sqliteTasksMode) {
+    if (sqliteCustomerMode) {
       return delay({
-        columns: ["id", "title", "status", "due_date"],
+        columns: ["CustomerID", "CompanyName", "ContactName", "City", "Country"],
         rows: [
-          ["1", "Review schema sync", "Open", "2026-06-01"],
-          ["2", "Prepare local import", "In Progress", "2026-06-03"],
-          ["3", "Archive old notes", "Done", "2026-05-28"]
+          ["ALFKI", "Alfreds Futterkiste", "Maria Anders", "Berlin", "Germany"],
+          ["ANATR", "Ana Trujillo Emparedados y helados", "Ana Trujillo", "Mexico D.F.", "Mexico"],
+          ["ANTON", "Antonio Moreno Taqueria", "Antonio Moreno", "Mexico D.F.", "Mexico"],
+          ["AROUT", "Around the Horn", "Thomas Hardy", "London", "UK"],
+          ["BERGS", "Berglunds snabbkop", "Christina Berglund", "Lulea", "Sweden"],
+          ["BLAUS", "Blauer See Delikatessen", "Hanna Moos", "Mannheim", "Germany"],
+          ["BLONP", "Blondesddsl pere et fils", "Frederique Citeaux", "Strasbourg", "France"],
+          ["BOLID", "Bolido Comidas preparadas", "Martin Sommer", "Madrid", "Spain"],
+          ["BONAP", "Bon app", "Laurence Lebihan", "Marseille", "France"],
+          ["BOTTM", "Bottom-Dollar Markets", "Elizabeth Lincoln", "Tsawassen", "Canada"]
         ]
       });
     }
 
-    if (sqliteNotesMode) {
+    if (sqliteProductMode) {
       return delay({
-        columns: ["id", "title", "created_at", "updated_at"],
+        columns: ["ProductID", "ProductName", "UnitPrice", "UnitsInStock"],
         rows: [
-          ["1", "SQLite local setup", "2026-05-25", "2026-05-30"],
-          ["2", "Provider configuration", "2026-05-27", "2026-05-29"],
-          ["3", "Smart builder ideas", "2026-05-29", "2026-05-30"]
+          ["1", "Chai", "18.00", "39"],
+          ["2", "Chang", "19.00", "17"],
+          ["3", "Aniseed Syrup", "10.00", "13"]
         ]
       });
     }
