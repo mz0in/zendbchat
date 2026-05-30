@@ -998,11 +998,90 @@ td {
 .chat-message {
   border: 1px solid #e4eaf3;
   background: #ffffff;
+  max-width: 92%;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.chat-message.user {
+  justify-self: end;
+  border-color: #b9d1ff;
+  background: #eaf2ff;
+}
+
+.chat-message strong {
+  color: #18202f;
+  font-size: 0.78rem;
 }
 
 .chat-message.assistant {
+  justify-self: start;
   border-color: #cfe0ff;
   background: #f1f6ff;
+}
+
+.chat-sql {
+  max-width: 100%;
+  max-height: 220px;
+  overflow: auto;
+  margin: 4px 0 0;
+  border: 1px solid #cfe0ff;
+  border-radius: 7px;
+  background: #081a33;
+  color: #dbeafe;
+  padding: 10px;
+  font-size: 0.78rem;
+  white-space: pre-wrap;
+}
+
+.chat-chart,
+.chat-chart-empty {
+  display: grid;
+  gap: 8px;
+  margin-top: 8px;
+  padding: 10px;
+  border: 1px solid #cfe0ff;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.chat-chart-empty {
+  color: var(--muted);
+  font-size: 0.84rem;
+}
+
+.chat-chart-row {
+  display: grid;
+  grid-template-columns: minmax(72px, 0.45fr) minmax(80px, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.78rem;
+}
+
+.chat-chart-row span {
+  overflow: hidden;
+  color: #40506a;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-chart-row div {
+  height: 9px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #e8eef8;
+}
+
+.chat-chart-row i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #1567ff, #55c4ff);
+}
+
+.chat-chart-row strong {
+  color: #18202f;
+  font-size: 0.76rem;
 }
 
 .saved-list button,

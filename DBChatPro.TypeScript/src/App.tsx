@@ -284,6 +284,31 @@ function createSystemMessage(result: QueryResult): ChatMessage {
   };
 }
 
+function wantsChart(message: string): boolean {
+  return /\b(chart|graph|plot|visual|visualize|line|bar|trend)\b|رسم|مخطط|بياني|رسم بياني|شارت/iu.test(message);
+}
+
+function createResultAwareReply(options: {
+  prompt: string;
+  generatedSql: string;
+  result: QueryResult;
+  aiModel: string;
+  aiPlatform: string;
+}): ChatMessage {
+  const provider = options.aiPlatform && options.aiModel ? `${options.aiPlatform} / ${options.aiModel}` : "the configured model";
+  const rowCount = options.result.rows.length;
+  const columns = options.result.columns.join(", ") || "no columns";
+  const chartNote = wantsChart(options.prompt) ? " I also added an inline chart from the current result set." : "";
+  const sqlNote = options.generatedSql.trim()
+    ? `\n\nSQL used:\n${options.generatedSql.trim()}`
+    : "\n\nNo SQL has been generated yet. Run a query first, then continue the conversation here.";
+
+  return {
+    role: "assistant",
+    text: `Using ${provider}, I reviewed the current query result: ${rowCount} rows with columns ${columns}.${chartNote}${sqlNote}`
+  };
+}
+
 function downloadCsv(result: QueryResult): void {
   const lines = [result.columns, ...result.rows].map((row) =>
     row.map((cell) => `"${cell.replaceAll('"', '""')}"`).join(",")
@@ -293,6 +318,163 @@ function downloadCsv(result: QueryResult): void {
   const link = document.createElement("a");
   link.href = url;
   link.download = "export.csv";
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+function escapeXml(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+function makeCrcTable(): number[] {
+  return Array.from({ length: 256 }, (_, index) => {
+    let crc = index;
+    for (let bit = 0; bit < 8; bit += 1) {
+      crc = crc & 1 ? 0xedb88320 ^ (crc >>> 1) : crc >>> 1;
+    }
+    return crc >>> 0;
+  });
+}
+
+const crcTable = makeCrcTable();
+
+function crc32(bytes: Uint8Array): number {
+  let crc = 0xffffffff;
+  for (const byte of bytes) {
+    crc = crcTable[(crc ^ byte) & 0xff] ^ (crc >>> 8);
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+function writeUint16(buffer: number[], value: number): void {
+  buffer.push(value & 0xff, (value >>> 8) & 0xff);
+}
+
+function writeUint32(buffer: number[], value: number): void {
+  buffer.push(value & 0xff, (value >>> 8) & 0xff, (value >>> 16) & 0xff, (value >>> 24) & 0xff);
+}
+
+function createZip(files: Array<{ name: string; content: string }>): Uint8Array {
+  const encoder = new TextEncoder();
+  const fileParts: number[] = [];
+  const centralDirectory: number[] = [];
+
+  for (const file of files) {
+    const nameBytes = encoder.encode(file.name);
+    const contentBytes = encoder.encode(file.content);
+    const checksum = crc32(contentBytes);
+    const localHeaderOffset = fileParts.length;
+
+    writeUint32(fileParts, 0x04034b50);
+    writeUint16(fileParts, 20);
+    writeUint16(fileParts, 0);
+    writeUint16(fileParts, 0);
+    writeUint16(fileParts, 0);
+    writeUint16(fileParts, 0);
+    writeUint32(fileParts, checksum);
+    writeUint32(fileParts, contentBytes.length);
+    writeUint32(fileParts, contentBytes.length);
+    writeUint16(fileParts, nameBytes.length);
+    writeUint16(fileParts, 0);
+    fileParts.push(...nameBytes, ...contentBytes);
+
+    writeUint32(centralDirectory, 0x02014b50);
+    writeUint16(centralDirectory, 20);
+    writeUint16(centralDirectory, 20);
+    writeUint16(centralDirectory, 0);
+    writeUint16(centralDirectory, 0);
+    writeUint16(centralDirectory, 0);
+    writeUint16(centralDirectory, 0);
+    writeUint32(centralDirectory, checksum);
+    writeUint32(centralDirectory, contentBytes.length);
+    writeUint32(centralDirectory, contentBytes.length);
+    writeUint16(centralDirectory, nameBytes.length);
+    writeUint16(centralDirectory, 0);
+    writeUint16(centralDirectory, 0);
+    writeUint16(centralDirectory, 0);
+    writeUint16(centralDirectory, 0);
+    writeUint32(centralDirectory, 0);
+    writeUint32(centralDirectory, localHeaderOffset);
+    centralDirectory.push(...nameBytes);
+  }
+
+  const centralDirectoryOffset = fileParts.length;
+  fileParts.push(...centralDirectory);
+  writeUint32(fileParts, 0x06054b50);
+  writeUint16(fileParts, 0);
+  writeUint16(fileParts, 0);
+  writeUint16(fileParts, files.length);
+  writeUint16(fileParts, files.length);
+  writeUint32(fileParts, centralDirectory.length);
+  writeUint32(fileParts, centralDirectoryOffset);
+  writeUint16(fileParts, 0);
+
+  return new Uint8Array(fileParts);
+}
+
+function downloadExcel(result: QueryResult): void {
+  if (!result.columns.length) {
+    return;
+  }
+
+  const headerCells = result.columns
+    .map((column, index) => `<c r="${String.fromCharCode(65 + index)}1" t="inlineStr" s="1"><is><t>${escapeXml(column)}</t></is></c>`)
+    .join("");
+  const bodyRows = result.rows
+    .map((row, rowIndex) => {
+      const cells = result.columns
+        .map((_, index) => {
+          const cell = row[index] ?? "";
+          const normalizedNumber = cell.replaceAll(",", "").trim();
+          const isNumber = /^-?\d+(\.\d+)?$/.test(normalizedNumber);
+          const cellReference = `${String.fromCharCode(65 + index)}${rowIndex + 2}`;
+          return isNumber
+            ? `<c r="${cellReference}"><v>${escapeXml(normalizedNumber)}</v></c>`
+            : `<c r="${cellReference}" t="inlineStr"><is><t>${escapeXml(cell)}</t></is></c>`;
+        })
+        .join("");
+      return `<row r="${rowIndex + 2}">${cells}</row>`;
+    })
+    .join("");
+  const columnDefinitions = result.columns
+    .map((_, index) => `<col min="${index + 1}" max="${index + 1}" width="22" customWidth="1"/>`)
+    .join("");
+  const workbook = createZip([
+    {
+      name: "[Content_Types].xml",
+      content: `<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>`
+    },
+    {
+      name: "_rels/.rels",
+      content: `<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>`
+    },
+    {
+      name: "xl/workbook.xml",
+      content: `<?xml version="1.0" encoding="UTF-8"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="DBChatPro Export" sheetId="1" r:id="rId1"/></sheets></workbook>`
+    },
+    {
+      name: "xl/_rels/workbook.xml.rels",
+      content: `<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>`
+    },
+    {
+      name: "xl/styles.xml",
+      content: `<?xml version="1.0" encoding="UTF-8"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="2"><font/><font><b/></font></fonts><fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FFEEF3FB"/><bgColor indexed="64"/></patternFill></fill></fills><borders count="1"><border/></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="2"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1"/></cellXfs></styleSheet>`
+    },
+    {
+      name: "xl/worksheets/sheet1.xml",
+      content: `<?xml version="1.0" encoding="UTF-8"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><cols>${columnDefinitions}</cols><sheetData><row r="1">${headerCells}</row>${bodyRows}</sheetData></worksheet>`
+    }
+  ]);
+  const blob = new Blob([workbook.buffer as ArrayBuffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = "export.xlsx";
   link.click();
   URL.revokeObjectURL(url);
 }
@@ -495,7 +677,13 @@ export function App() {
     const nextHistory = [...chatHistory, { role: "user" as const, text: chatPrompt }];
     setChatHistory(nextHistory);
     setChatPrompt("");
-    const reply = await api.chatPrompt(nextHistory, aiModel, aiPlatform);
+    const reply = createResultAwareReply({
+      prompt: chatPrompt,
+      generatedSql,
+      result,
+      aiModel,
+      aiPlatform
+    });
     setChatHistory([...nextHistory, reply]);
   }
 
@@ -573,7 +761,8 @@ export function App() {
         onRun={() => runPrompt()}
         onExecuteSql={executeSql}
         onSaveFavorite={saveFavorite}
-        onExport={() => downloadCsv(result)}
+        onExportCsv={() => downloadCsv(result)}
+        onExportExcel={() => downloadExcel(result)}
         onLoadPrompt={(query) => {
           setPrompt(query);
           runPrompt(query);
@@ -669,7 +858,8 @@ interface DashboardProps {
   onRun(): void;
   onExecuteSql(): void;
   onSaveFavorite(): void;
-  onExport(): void;
+  onExportCsv(): void;
+  onExportExcel(): void;
   onLoadPrompt(query: string): void;
   onSelectConnection(name: string): void;
   onSendChat(): void;
@@ -788,14 +978,17 @@ function DashboardView(props: DashboardProps) {
             setStripedRows={props.setStripedRows}
             setBorderedRows={props.setBorderedRows}
             onFavorite={props.onSaveFavorite}
-            onExport={props.onExport}
+            onExportCsv={props.onExportCsv}
+            onExportExcel={props.onExportExcel}
           />
         )}
 
         {props.activeTab === "sql" && (
           <section className="panel">
             <SmartSqlBuilder
+              key={`${props.activeConnection?.name ?? "none"}-${props.activeConnection?.databaseType ?? "none"}`}
               schema={props.schema}
+              databaseName={props.activeConnection?.name ?? ""}
               databaseType={props.activeConnection?.databaseType ?? "MSSQL"}
               onBuild={(sql) => props.setGeneratedSql(sql)}
             />
@@ -827,6 +1020,8 @@ function DashboardView(props: DashboardProps) {
             <ChatPanel
               history={props.chatHistory}
               prompt={props.chatPrompt}
+              generatedSql={props.generatedSql}
+              result={props.result}
               setPrompt={props.setChatPrompt}
               onSend={props.onSendChat}
               onClear={props.onClearChat}
@@ -842,6 +1037,7 @@ function DashboardView(props: DashboardProps) {
 
 function SmartSqlBuilder(props: {
   schema: DatabaseSchema;
+  databaseName: string;
   databaseType: DatabaseType;
   onBuild(sql: string): void;
 }) {
@@ -858,7 +1054,7 @@ function SmartSqlBuilder(props: {
   const [groupByColumn, setGroupByColumn] = useState("");
   const [sortColumn, setSortColumn] = useState("");
   const [sortDirection, setSortDirection] = useState("DESC");
-  const [limit, setLimit] = useState("10");
+  const [limit, setLimit] = useState("50");
 
   const tableNames = props.schema.schemaStructured.map((table) => table.tableName);
   const activeTable = props.schema.schemaStructured.find((table) => table.tableName === tableName);
@@ -866,25 +1062,14 @@ function SmartSqlBuilder(props: {
   const joinActiveTable = props.schema.schemaStructured.find((table) => table.tableName === joinTable);
   const joinColumns = joinActiveTable?.columns.map((column) => `${joinTable}.${column}`) ?? [];
   const allColumns = [...activeColumns, ...joinColumns];
+  const schemaKey = useMemo(
+    () => props.schema.schemaStructured.map((table) => `${table.tableName}:${table.columns.join(",")}`).join("|"),
+    [props.schema]
+  );
 
   useEffect(() => {
-    if (!tableName && firstTable) {
-      setTableName(firstTable);
-    }
-  }, [firstTable, tableName]);
-
-  useEffect(() => {
-    if (tableName && !tableNames.includes(tableName) && firstTable) {
-      setTableName(firstTable);
-      setSelectedColumns([]);
-      setJoinTable("");
-      setJoinLeftColumn("");
-      setJoinRightColumn("");
-      setFilterColumn("");
-      setGroupByColumn("");
-      setSortColumn("");
-    }
-  }, [firstTable, tableName, tableNames]);
+    resetBuilder();
+  }, [schemaKey, props.databaseType, props.databaseName]);
 
   function toggleColumn(columnName: string) {
     setSelectedColumns((current) =>
@@ -926,7 +1111,7 @@ function SmartSqlBuilder(props: {
     setGroupByColumn("");
     setSortColumn("");
     setSortDirection("DESC");
-    setLimit("10");
+    setLimit("50");
   }
 
   function selectAllColumns() {
@@ -943,6 +1128,26 @@ function SmartSqlBuilder(props: {
     setJoinRightColumn(nextId ? `${nextJoinTable}.${nextId}` : "");
   }
 
+  function updateTableName(nextTableName: string) {
+    setTableName(nextTableName);
+    setSelectedColumns([]);
+    setJoinTable("");
+    setJoinLeftColumn("");
+    setJoinRightColumn("");
+    setFilterColumn("");
+    setGroupByColumn("");
+    setSortColumn("");
+  }
+
+  function updateJoinTable(nextJoinTable: string) {
+    setJoinTable(nextJoinTable);
+    setJoinLeftColumn("");
+    setJoinRightColumn("");
+    setFilterColumn("");
+    setGroupByColumn("");
+    setSortColumn("");
+  }
+
   if (!props.schema.schemaStructured.length) {
     return <div className="sql-builder muted-panel">Connect a database to enable the visual SQL builder.</div>;
   }
@@ -952,7 +1157,7 @@ function SmartSqlBuilder(props: {
       <div className="builder-header">
         <div>
           <h2>Smart SQL Builder</h2>
-          <p>Build a query visually from the active schema, then edit the generated SQL before execution.</p>
+          <p>Build a query visually from the active schema for {props.databaseName || "the selected database"}.</p>
         </div>
         <div className="action-row">
           <button className="secondary-button" onClick={selectAllColumns} disabled={!activeColumns.length}>
@@ -972,18 +1177,21 @@ function SmartSqlBuilder(props: {
 
       <div className="builder-grid">
         <label>
-          Database table
-          <input list="sql-builder-tables" value={tableName} onChange={(event) => setTableName(event.target.value)} placeholder="Start typing a table name" />
+          Selected database
+          <input value={props.databaseName || "No database selected"} readOnly />
         </label>
-        <datalist id="sql-builder-tables">
-          {tableNames.map((name) => (
-            <option key={name} value={name} />
-          ))}
-        </datalist>
+        <label>
+          Database table
+          <select value={tableName} onChange={(event) => updateTableName(event.target.value)}>
+            {tableNames.map((name) => (
+              <option key={name} value={name}>{name}</option>
+            ))}
+          </select>
+        </label>
 
         <label>
           Limit
-          <input value={limit} onChange={(event) => setLimit(event.target.value)} inputMode="numeric" placeholder="10" />
+          <input value={limit} onChange={(event) => setLimit(event.target.value)} inputMode="numeric" placeholder="Leave blank for no row limit" />
         </label>
       </div>
 
@@ -1011,13 +1219,13 @@ function SmartSqlBuilder(props: {
         </label>
         <label>
           Join table
-          <input list="sql-builder-join-tables" value={joinTable} onChange={(event) => setJoinTable(event.target.value)} placeholder="Optional table" />
+          <select value={joinTable} onChange={(event) => updateJoinTable(event.target.value)}>
+            <option value="">No join</option>
+            {tableNames.filter((name) => name !== tableName).map((name) => (
+              <option key={name} value={name}>{name}</option>
+            ))}
+          </select>
         </label>
-        <datalist id="sql-builder-join-tables">
-          {tableNames.filter((name) => name !== tableName).map((name) => (
-            <option key={name} value={name} />
-          ))}
-        </datalist>
         <label>
           Left column
           <input list="sql-builder-active-columns" value={joinLeftColumn} onChange={(event) => setJoinLeftColumn(event.target.value)} placeholder={`${tableName}.Id`} />
@@ -1102,7 +1310,8 @@ function ResultsPanel(props: {
   setStripedRows(value: boolean): void;
   setBorderedRows(value: boolean): void;
   onFavorite(): void;
-  onExport(): void;
+  onExportCsv(): void;
+  onExportExcel(): void;
 }) {
   if (!props.result.rows.length) {
     return <section className="panel muted-panel">No data to show.</section>;
@@ -1111,11 +1320,11 @@ function ResultsPanel(props: {
   return (
     <section className="panel">
       <div className="result-banner">
-        <span><CheckCircle2 size={17} /> Query executed successfully</span>
+          <span><CheckCircle2 size={17} /> Query executed successfully</span>
         <div>
           <span>812 ms</span>
           <span>{props.result.rows.length} rows</span>
-          <button className="icon-button" title="Export data" onClick={props.onExport}><Download size={17} /></button>
+          <button className="icon-button" title="Export Excel" onClick={props.onExportExcel}><Download size={17} /></button>
         </div>
       </div>
       <div className="table-scroll">
@@ -1144,7 +1353,8 @@ function ResultsPanel(props: {
         <label><input type="checkbox" checked={props.stripedRows} onChange={(event) => props.setStripedRows(event.target.checked)} /> Striped</label>
         <label><input type="checkbox" checked={props.borderedRows} onChange={(event) => props.setBorderedRows(event.target.checked)} /> Bordered</label>
         <button className="secondary-button" onClick={props.onFavorite}><Heart size={17} /> Favorite</button>
-        <button className="secondary-button" onClick={props.onExport}><Download size={17} /> Export Data</button>
+        <button className="secondary-button" onClick={props.onExportCsv}><Download size={17} /> Export CSV</button>
+        <button className="secondary-button" onClick={props.onExportExcel}><Download size={17} /> Export Excel</button>
       </div>
     </section>
   );
@@ -1245,10 +1455,14 @@ function SchemaTree({ schema, databaseName }: { schema: DatabaseSchema; database
 function ChatPanel(props: {
   history: ChatMessage[];
   prompt: string;
+  generatedSql: string;
+  result: QueryResult;
   setPrompt(value: string): void;
   onSend(): void;
   onClear(): void;
 }) {
+  const visibleMessages = props.history.filter((message) => message.role !== "system");
+
   return (
     <section className="drawer-section chat-panel">
       <div className="drawer-ai-header">
@@ -1256,23 +1470,26 @@ function ChatPanel(props: {
         <strong>DBChatPro AI</strong>
       </div>
       <div className="chat-list">
-        {props.history.filter((message) => message.role !== "system").map((message, index) => (
+        {visibleMessages.map((message, index) => (
           <article key={`${message.role}-${index}`} className={`chat-message ${message.role}`}>
             <strong>{message.role === "user" ? "You" : "AI Assistant"}</strong>
-            <span>{message.text}</span>
+            <ChatMessageBody text={message.text} />
+            {message.role === "assistant" && wantsChart(visibleMessages[index - 1]?.text ?? "") && (
+              <ChatResultChart result={props.result} />
+            )}
           </article>
         ))}
-        {!props.history.some((message) => message.role !== "system") && (
+        {!visibleMessages.length && (
           <article className="chat-message assistant">
             <strong>AI Assistant</strong>
-            <span>Run a query, then ask for trends, exceptions, charts, or a safer SQL rewrite.</span>
+            <span>Run a query, then ask for trends, exceptions, charts, SQL details, or a safer SQL rewrite.</span>
           </article>
         )}
       </div>
       <div className="chat-suggestions">
         <button onClick={() => props.setPrompt("Show this as a line chart")}>Show this as a line chart</button>
         <button onClick={() => props.setPrompt("Compare to previous year")}>Compare to previous year</button>
-        <button onClick={() => props.setPrompt("Break down by sub-category")}>Break down by sub-category</button>
+        <button onClick={() => props.setPrompt("Show the SQL command and explain the result")}>Show SQL and explain</button>
       </div>
       <textarea value={props.prompt} onChange={(event) => props.setPrompt(event.target.value)} placeholder="Ask about trends, outliers, or next actions" />
       <div className="action-row">
@@ -1280,6 +1497,48 @@ function ChatPanel(props: {
         <button className="secondary-button" onClick={props.onClear}>Clear</button>
       </div>
     </section>
+  );
+}
+
+function ChatMessageBody({ text }: { text: string }) {
+  const [beforeSql, sql] = text.split("\n\nSQL used:\n");
+
+  return (
+    <>
+      <span>{beforeSql}</span>
+      {sql && (
+        <pre className="chat-sql"><code>{sql}</code></pre>
+      )}
+    </>
+  );
+}
+
+function ChatResultChart({ result }: { result: QueryResult }) {
+  const numericColumnIndex = result.columns.findIndex((_, index) =>
+    result.rows.some((row) => parseNumericCell(row[index]) !== null)
+  );
+  const labelColumnIndex = result.columns.findIndex((_, index) => index !== numericColumnIndex);
+
+  if (!result.rows.length || numericColumnIndex < 0) {
+    return <div className="chat-chart-empty">No numeric result column is available for a chart.</div>;
+  }
+
+  const values = result.rows.slice(0, 6).map((row) => ({
+    label: row[labelColumnIndex] ?? row[0] ?? "Row",
+    value: parseNumericCell(row[numericColumnIndex]) ?? 0
+  }));
+  const maxValue = Math.max(...values.map((item) => item.value), 1);
+
+  return (
+    <div className="chat-chart">
+      {values.map((item) => (
+        <div className="chat-chart-row" key={`${item.label}-${item.value}`}>
+          <span>{item.label}</span>
+          <div><i style={{ width: `${Math.max(8, (item.value / maxValue) * 100)}%` }} /></div>
+          <strong>{item.value.toLocaleString()}</strong>
+        </div>
+      ))}
+    </div>
   );
 }
 
