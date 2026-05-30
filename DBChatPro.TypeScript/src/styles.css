@@ -703,3 +703,349 @@ th {
     width: 100%;
   }
 }
+
+/* UI refresh */
+:root {
+  --app-bg: #f5f7fb;
+  --sidebar-bg: #071a3b;
+  --sidebar-bg-2: #0b2552;
+  --surface: #ffffff;
+  --surface-muted: #f8fafd;
+  --line: #d9e2ef;
+  --line-strong: #c6d2e3;
+  --text: #172033;
+  --muted: #647084;
+  --brand-blue: #1459e6;
+  --brand-blue-dark: #0d45b8;
+  --success-bg: #edf9f1;
+  --success-text: #176f3b;
+  --danger: #b42318;
+  --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.05);
+  --shadow-md: 0 18px 45px rgba(15, 23, 42, 0.08);
+}
+
+body {
+  color: var(--text);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(245, 247, 251, 0.9) 30%),
+    var(--app-bg);
+}
+
+.app-shell {
+  grid-template-columns: 248px minmax(0, 1fr);
+}
+
+.side-nav {
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  background: linear-gradient(180deg, var(--sidebar-bg) 0%, #061326 100%);
+  border-right: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: inset -1px 0 0 rgba(255, 255, 255, 0.04);
+}
+
+.brand {
+  gap: 10px;
+  margin-bottom: 30px;
+  padding: 4px 4px 20px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+  font-size: 1.12rem;
+  letter-spacing: 0;
+}
+
+.brand svg {
+  color: #7fb0ff;
+}
+
+.nav-button {
+  min-height: 42px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  color: #c2cde0;
+  font-size: 0.94rem;
+  font-weight: 700;
+  transition: background-color 140ms ease, color 140ms ease, border-color 140ms ease;
+}
+
+.nav-button.active {
+  color: #ffffff;
+  background: rgba(69, 119, 225, 0.24);
+  border-color: rgba(134, 173, 255, 0.18);
+}
+
+.nav-button:hover {
+  color: #ffffff;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.workspace {
+  padding: 26px;
+}
+
+.page-header {
+  align-items: center;
+  margin-bottom: 18px;
+}
+
+.page-header h1 {
+  color: #101827;
+  font-size: clamp(1.45rem, 2vw, 2rem);
+  font-weight: 800;
+}
+
+.page-header p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.95rem;
+}
+
+.toolbar-grid {
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+}
+
+label {
+  color: #41506a;
+  font-size: 0.82rem;
+  font-weight: 750;
+}
+
+input,
+select,
+textarea {
+  border-color: var(--line-strong);
+  border-radius: 7px;
+  background: #ffffff;
+  color: var(--text);
+  font-size: 0.94rem;
+  box-shadow: inset 0 1px 0 rgba(15, 23, 42, 0.02);
+}
+
+textarea {
+  line-height: 1.55;
+}
+
+.prompt-box {
+  margin-top: 14px;
+}
+
+.prompt-box textarea {
+  min-height: 150px;
+}
+
+.primary-button {
+  background: var(--brand-blue);
+  box-shadow: 0 8px 18px rgba(20, 89, 230, 0.18);
+  transition: background-color 140ms ease, transform 140ms ease, box-shadow 140ms ease;
+}
+
+.primary-button:hover:not(:disabled) {
+  background: var(--brand-blue-dark);
+  box-shadow: 0 10px 22px rgba(20, 89, 230, 0.24);
+  transform: translateY(-1px);
+}
+
+.secondary-button {
+  border: 1px solid var(--line);
+  background: #f4f7fc;
+  color: #253045;
+}
+
+.secondary-button:hover:not(:disabled),
+.icon-button:hover:not(:disabled) {
+  background: #eaf0f8;
+}
+
+.icon-button {
+  border-color: var(--line);
+  box-shadow: var(--shadow-sm);
+}
+
+.panel,
+.right-drawer,
+.empty-state {
+  border-color: var(--line);
+  border-radius: 8px;
+  box-shadow: var(--shadow-md);
+}
+
+.panel {
+  padding: 18px;
+}
+
+.tabs {
+  gap: 0;
+  margin-top: 18px;
+  border-bottom-color: var(--line);
+}
+
+.tabs button {
+  border-radius: 7px 7px 0 0;
+  color: #60708a;
+  font-size: 0.9rem;
+}
+
+.tabs button.active {
+  background: var(--surface);
+  color: var(--brand-blue);
+  box-shadow: inset 0 -2px 0 var(--brand-blue);
+}
+
+.right-drawer {
+  overflow: hidden auto;
+}
+
+.drawer-section {
+  padding: 16px;
+}
+
+.schema-tree details {
+  border-bottom-color: #e8edf5;
+}
+
+.schema-tree summary {
+  color: #243149;
+}
+
+.schema-tree li {
+  margin: 4px 0;
+  font-size: 0.9rem;
+}
+
+table {
+  border-radius: 8px;
+  overflow: hidden;
+  font-size: 0.9rem;
+}
+
+th {
+  color: #536179;
+  background: #f3f6fb;
+  letter-spacing: 0;
+}
+
+td {
+  color: #253045;
+}
+
+.bordered-rows th,
+.bordered-rows td {
+  border-color: #e1e7f0;
+}
+
+.striped-rows tbody tr:nth-child(even) {
+  background: #f9fbfe;
+}
+
+.control-strip {
+  padding-top: 12px;
+  border-top: 1px solid #e8edf5;
+}
+
+.sql-builder {
+  background: var(--surface-muted);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8);
+}
+
+.builder-header {
+  padding-bottom: 12px;
+  border-bottom: 1px solid #e1e7f0;
+}
+
+.builder-header h2,
+.settings-panel h2,
+.configured-model h2,
+.connection-grid h2 {
+  color: #111b2d;
+  font-weight: 800;
+}
+
+.builder-label {
+  color: #41506a;
+}
+
+.column-chip-list button {
+  border-color: #cfd9e8;
+  background: #ffffff;
+  color: #2f3b52;
+  box-shadow: var(--shadow-sm);
+}
+
+.column-chip-list button:hover {
+  border-color: #8fb0f2;
+  color: var(--brand-blue);
+}
+
+.column-chip-list button.selected {
+  border-color: var(--brand-blue);
+  background: var(--brand-blue);
+}
+
+.chat-message {
+  border: 1px solid #e4eaf3;
+  background: #ffffff;
+}
+
+.chat-message.assistant {
+  border-color: #cfe0ff;
+  background: #f1f6ff;
+}
+
+.saved-list button,
+.connection-list article,
+.custom-provider-list article {
+  border-color: var(--line);
+  box-shadow: var(--shadow-sm);
+}
+
+.saved-list button:hover {
+  border-color: #9bb8f0;
+  background: #f4f8ff;
+}
+
+.connection-grid .panel,
+.settings-panel,
+.configured-model {
+  box-shadow: var(--shadow-md);
+}
+
+.custom-provider-box {
+  background: #f6f9fe;
+  border-color: #d8e3f2;
+}
+
+.configured-model dl div {
+  border-bottom-color: #e5ebf4;
+}
+
+.status-text {
+  color: var(--success-text);
+  background: var(--success-bg);
+  border: 1px solid #cbeed7;
+  border-radius: 999px;
+  padding: 6px 10px;
+  font-size: 0.86rem;
+}
+
+.error-text {
+  color: var(--danger);
+  background: #fff2f0;
+  border: 1px solid #ffd1cc;
+  border-radius: 999px;
+  padding: 6px 10px;
+  font-size: 0.86rem;
+}
+
+@media (max-width: 760px) {
+  .side-nav {
+    height: auto;
+  }
+
+  .toolbar-grid {
+    padding: 12px;
+  }
+}
